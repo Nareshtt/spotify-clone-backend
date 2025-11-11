@@ -2,10 +2,14 @@ from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from .youtube_search import YouTubeSearcher
-from django.http import HttpResponse, FileResponse
-from pytubefix import YouTube
+from django.http import HttpResponse
 import os
 import tempfile
+import logging
+import yt_dlp
+import shutil
+
+logger = logging.getLogger(__name__)
 
 class YouTubeThumbnailView(APIView):
     """
@@ -28,6 +32,7 @@ class YouTubeThumbnailView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
+
 class YouTubeSearchView(APIView):
     """
     API endpoint to search YouTube videos
@@ -48,41 +53,124 @@ class YouTubeSearchView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
+
 class YouTubeDownloadView(APIView):
+    """
+    Download YouTube audio as MP3 using yt-dlp
+    File is temporarily downloaded, served to frontend, then immediately deleted
+    Supports both GET and POST methods
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, format=None):
+        """Handle GET requests with ?url= parameter"""
+        youtube_url = request.GET.get('url')
+        return self._download_audio(youtube_url)
+
     def post(self, request, format=None):
+        """Handle POST requests with url in body"""
         youtube_url = request.data.get('url')
+        return self._download_audio(youtube_url)
+
+    def _download_audio(self, youtube_url):
+        """
+        Core download logic using yt-dlp
+        Downloads to temp directory, serves file, then cleans up immediately
+        """
         if not youtube_url:
             return Response({'error': 'URL required'}, status=400)
 
+        temp_dir = None
         try:
-            yt = YouTube(youtube_url)
-            song_name = yt.title
+            logger.info(f"🔗 Starting download: {youtube_url}")
 
-            audio_stream = yt.streams.filter(only_audio=True, file_extension='mp4').order_by('abr').desc().first()
-            if not audio_stream:
-                audio_stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
+            # Create temp directory for this download
+            temp_dir = tempfile.mkdtemp(prefix='youtube_dl_')
+            output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
-            if not audio_stream:
-                return Response({'error': 'No audio stream available'}, status=400)
+            # yt-dlp options - download best audio and convert to MP3
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': output_template,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+            }
 
-            # Use /tmp directory for Vercel
-            temp_path = f"/tmp/{song_name[:50]}.mp3"
+            # Download video and extract metadata
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                logger.info("📝 Extracting video info...")
+                info = ydl.extract_info(youtube_url, download=True)
+                song_name = info.get('title', 'audio')
 
-            audio_path = audio_stream.download(filename=temp_path)
+                logger.info(f"📝 Title: {song_name}")
 
-            if not audio_path.endswith('.mp3'):
-                mp3_path = audio_path.replace('.mp4', '.mp3')
-                os.rename(audio_path, mp3_path)
-                audio_path = mp3_path
+            # Find the downloaded MP3 file in temp directory
+            downloaded_file = None
+            for file in os.listdir(temp_dir):
+                if file.endswith('.mp3'):
+                    downloaded_file = os.path.join(temp_dir, file)
+                    break
 
-            response = FileResponse(
-                open(audio_path, 'rb'),
-                as_attachment=True,
-                filename=f"{song_name[:50]}.mp3",
+            if not downloaded_file or not os.path.exists(downloaded_file):
+                raise Exception("Download completed but MP3 file not found")
+
+            file_size = os.path.getsize(downloaded_file)
+            logger.info(f"✓ Downloaded: {file_size} bytes ({file_size / 1024 / 1024:.2f} MB)")
+
+            if file_size == 0:
+                raise Exception("Downloaded file is empty")
+
+            # Read entire file into memory so we can delete it immediately
+            with open(downloaded_file, 'rb') as audio_file:
+                audio_data = audio_file.read()
+
+            logger.info(f"✓ File read into memory: {len(audio_data)} bytes")
+
+            # Clean up temp files BEFORE sending response
+            # This is safe because we have the data in memory
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"🗑️ Cleaned up temp directory: {temp_dir}")
+                temp_dir = None  # Mark as cleaned
+            except Exception as cleanup_error:
+                logger.warning(f"⚠️ Cleanup error: {cleanup_error}")
+
+            # Create HTTP response with the audio data
+            response = HttpResponse(
+                audio_data,
                 content_type='audio/mpeg'
             )
+
+            # Set headers for download
+            safe_filename = "".join(c for c in song_name if c.isalnum() or c in (' ', '-', '_'))[:50]
+            response['Content-Disposition'] = f'attachment; filename="{safe_filename}.mp3"'
+            response['Content-Length'] = len(audio_data)
+            response['Accept-Ranges'] = 'bytes'
+            response['Cache-Control'] = 'no-cache'
+
+            logger.info(f"✓ Response ready: {len(audio_data)} bytes ({len(audio_data) / 1024 / 1024:.2f} MB)")
+            logger.info(f"✓ Temporary files already cleaned up")
 
             return response
 
         except Exception as e:
-            return Response({'error': str(e)}, status=500)
+            logger.error(f"✗ Download error: {str(e)}", exc_info=True)
+            return Response({
+                'error': str(e),
+                'url': youtube_url
+            }, status=500)
+
+        finally:
+            # Final cleanup in case something went wrong before the normal cleanup
+            if temp_dir and os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir)
+                    logger.info(f"🗑️ Final cleanup of temp directory: {temp_dir}")
+                except Exception as cleanup_error:
+                    logger.error(f"Final cleanup error: {cleanup_error}")
