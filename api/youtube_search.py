@@ -11,45 +11,14 @@ class YouTubeSearcher:
         })
 
     def search(self, query, max_results=10):
-        """Search YouTube using pytubefix Search - more reliable"""
+        """Search YouTube using web scraping to avoid bot detection"""
         try:
             print(f"Searching for: {query}")
-
-            # Use pytubefix Search for better reliability
-            search = Search(query)
-            videos = []
-
-            # Get first 5 results
-            for i, video in enumerate(search.results[:max_results]):
-                try:
-                    # Use pytubefix YouTube object like in utils.py
-                    yt = YouTube(video.watch_url)
-
-                    # Get video data using same method as utils.py
-                    # Use direct thumbnail URL since we'll proxy it in frontend
-                    thumbnail_url = yt.thumbnail_url
-
-                    video_data = {
-                        'id': yt.video_id,
-                        'title': yt.title,
-                        'thumbnail': thumbnail_url,  # Direct URL, frontend will proxy
-                        'channelName': yt.author,
-                        'duration': self._format_duration(yt.length),
-                        'url': yt.watch_url
-                    }
-                    videos.append(video_data)
-                    print(f"Found: {yt.title} by {yt.author}")
-                    print(f"Thumbnail URL: {yt.thumbnail_url}")
-                except Exception as e:
-                    print(f"Error processing video {i}: {str(e)}")
-                    continue
-
-            return videos
-
+            # Use fallback method directly to avoid bot detection
+            return self._fallback_search(query, max_results)
         except Exception as e:
             print(f"Search error: {str(e)}")
-            # Fallback to web scraping if pytubefix fails
-            return self._fallback_search(query, max_results)
+            return []
 
     def _fallback_search(self, query, max_results=10):
         """Fallback web scraping method"""
