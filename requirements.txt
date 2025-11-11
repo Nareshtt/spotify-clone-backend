@@ -5,5 +5,5 @@ python-dotenv
 django-cors-headers
 whitenoise
 pillow
-pytubefix
+yt-dlp
 requests
