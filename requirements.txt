@@ -7,4 +7,3 @@ whitenoise
 pillow
 pytubefix
 requests
-bs4
