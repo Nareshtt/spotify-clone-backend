@@ -5,11 +5,11 @@ import shutil
 
 class Video2Audio:
     """
-    YouTube to Audio converter with bot detection bypass
+    Simple YouTube to Audio converter using yt-dlp
+    Downloads temporarily, returns file path, caller is responsible for cleanup
     """
-    def __init__(self, video_url, cookies_file=None):
+    def __init__(self, video_url):
         self.video_url = video_url
-        self.cookies_file = cookies_file
 
     def convert(self, output_dir=None):
         """
@@ -21,16 +21,17 @@ class Video2Audio:
         Returns:
             dict: {
                 'success': bool,
-                'file_path': str,
-                'title': str,
-                'size': int,
-                'temp_dir': str
+                'file_path': str,  # Path to downloaded MP3
+                'title': str,      # Video title
+                'size': int,       # File size in bytes
+                'temp_dir': str    # Temp directory path (for cleanup)
             }
         """
         temp_dir = None
         try:
             print(f"🔗 Processing: {self.video_url}")
 
+            # Use provided output_dir or create temp directory
             if output_dir:
                 os.makedirs(output_dir, exist_ok=True)
                 temp_dir = output_dir
@@ -41,7 +42,7 @@ class Video2Audio:
 
             output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
-            # Enhanced yt-dlp options to bypass bot detection
+            # yt-dlp options
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'outtmpl': output_template,
@@ -52,34 +53,7 @@ class Video2Audio:
                 }],
                 'quiet': True,
                 'no_warnings': True,
-                # Better headers to mimic real browser
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Sec-Fetch-Mode': 'navigate',
-                },
-                # Use Android client as fallback
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android', 'web'],
-                        'player_skip': ['webpage'],
-                    }
-                },
             }
-
-            # Add cookies if provided
-            if self.cookies_file and os.path.exists(self.cookies_file):
-                ydl_opts['cookiefile'] = self.cookies_file
-                print(f"🍪 Using cookies from: {self.cookies_file}")
-            else:
-                # Try to use browser cookies (Chrome by default)
-                try:
-                    ydl_opts['cookiesfrombrowser'] = ('chrome',)
-                    print("🍪 Attempting to use Chrome cookies")
-                except:
-                    print("⚠️ No cookies available, proceeding without authentication")
 
             # Download and extract info
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -123,6 +97,7 @@ class Video2Audio:
             import traceback
             traceback.print_exc()
 
+            # Cleanup on error if we created a temp directory
             if temp_dir and os.path.exists(temp_dir) and not output_dir:
                 try:
                     shutil.rmtree(temp_dir)
@@ -137,7 +112,12 @@ class Video2Audio:
 
     @staticmethod
     def cleanup(temp_dir):
-        """Helper method to cleanup temporary directory"""
+        """
+        Helper method to cleanup temporary directory
+
+        Args:
+            temp_dir: Path to temporary directory to remove
+        """
         if temp_dir and os.path.exists(temp_dir):
             try:
                 shutil.rmtree(temp_dir)
@@ -147,3 +127,30 @@ class Video2Audio:
                 print(f"⚠️ Cleanup error: {e}")
                 return False
         return False
+
+
+# Example usage:
+if __name__ == "__main__":
+    # Example 1: Download to temp directory (auto-cleanup needed)
+    converter = Video2Audio("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    result = converter.convert()
+
+    if result['success']:
+        print(f"✓ File saved at: {result['file_path']}")
+        print(f"✓ Size: {result['size']} bytes")
+
+        # Do something with the file...
+        # ...
+
+        # Clean up when done
+        if result['temp_dir']:
+            Video2Audio.cleanup(result['temp_dir'])
+    else:
+        print(f"✗ Error: {result['error']}")
+
+    # Example 2: Download to specific directory (no cleanup needed)
+    converter2 = Video2Audio("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    result2 = converter2.convert(output_dir="./downloads")
+
+    if result2['success']:
+        print(f"✓ File permanently saved at: {result2['file_path']}")
